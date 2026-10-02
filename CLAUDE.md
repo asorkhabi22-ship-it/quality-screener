@@ -48,6 +48,8 @@ quality_screener/     package
   portfolios.py       quintile portfolios on filing dates
   stats.py            return statistics and tests
   viz.py              plotly figures
+scripts/fetch_all.py  bulk download of companyfacts + submissions (failures -> data/raw/failures.csv)
+data/sp500_constituents.csv  Wikipedia S&P 500 snapshot (fallback when the scrape fails)
 data/raw/             cached API responses (gitignored)
 data/processed/       parquet outputs
 notebooks/            exploration and case studies
@@ -61,6 +63,8 @@ tests/                pytest suite
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
 .venv/bin/pytest
+.venv/bin/python scripts/fetch_all.py                 # whole universe
+.venv/bin/python scripts/fetch_all.py --tickers AAPL  # subset
 ```
 
 Homebrew Python is PEP 668 "externally managed": always install into `.venv`, never system Python.

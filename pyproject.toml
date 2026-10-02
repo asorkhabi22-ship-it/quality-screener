@@ -18,6 +18,7 @@ dependencies = [
     "yfinance>=0.2.40",
     "kaleido>=1.0",
     "tqdm>=4.66",
+    "lxml>=5",  # parser backend for pandas.read_html
 ]
 
 [project.optional-dependencies]
@@ -28,4 +29,5 @@ include = ["quality_screener*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]  # lets tests import scripts/
 addopts = "-ra"
