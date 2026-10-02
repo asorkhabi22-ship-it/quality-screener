@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Environments
+.venv/
+
+# Tooling
+.pytest_cache/
+.ipynb_checkpoints/
+.remember/
+.DS_Store
+
+# Raw SEC / price API cache: regenerable, never committed
+data/raw/*
+!data/raw/.gitkeep

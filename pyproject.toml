@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quality-screener"
+version = "0.1.0"
+description = "Point-in-time accounting quality scores (Piotroski F, Altman Z, Beneish M, Sloan accruals) from SEC EDGAR, with a quintile-portfolio backtest formed on filing dates."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Amir Sorkhabi" }]
+dependencies = [
+    "requests>=2.31",
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "plotly>=6.1",
+    "pyarrow>=15",
+    "yfinance>=0.2.40",
+    "kaleido>=1.0",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+include = ["quality_screener*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
