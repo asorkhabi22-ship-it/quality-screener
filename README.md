@@ -11,8 +11,9 @@ The research question: do high-quality firms outperform low-quality firms? Quint
 are formed on SEC **filing** dates (not fiscal period ends), using as-first-reported values, so
 the backtest only uses information that was public at the time.
 
-**Status:** data pipeline, scores, monthly quintile portfolios and the backtest statistics are
-built; results are in [reports/results.md](reports/results.md). Charts (`viz.py`) are next.
+**Status:** complete pipeline from SEC filings to backtest. Results are in
+[reports/results.md](reports/results.md); charts are in `reports/figures/` and in
+`reports/dashboard.html` (open it in a browser; it only loads plotly.js from its CDN).
 
 ## Pipeline
 
@@ -24,7 +25,10 @@ built; results are in [reports/results.md](reports/results.md). Charts (`viz.py`
 .venv/bin/python scripts/build_portfolios.py  # monthly quintile holdings per signal
 .venv/bin/python scripts/build_portfolios.py --include-fin-util
 .venv/bin/python scripts/run_backtest.py      # returns, statistics -> reports/results.md
+.venv/bin/python scripts/build_dashboard.py   # figures (HTML + PNG) and reports/dashboard.html
 ```
+
+PNG export uses kaleido, which needs a local Chrome or Chromium.
 
 ## Setup
 

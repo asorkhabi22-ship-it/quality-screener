@@ -37,17 +37,7 @@ HORIZONS = (3, 6, 12)
 T_CRITICAL = 1.96  # two-sided 5%
 REPORT_MD = config.REPORTS_DIR / "results.md"
 REPORT_CSV = config.REPORTS_DIR / "results.csv"
-PORTFOLIO_RETURNS_PATH = config.PROCESSED_DIR / "portfolio_returns.parquet"
-LONG_SHORT_PATH = config.PROCESSED_DIR / "long_short_returns.parquet"
-SIGNAL_LABELS = {
-    "f_group": "Piotroski F (groups)",
-    "f_score": "Piotroski F (quintiles)",
-    "altman_z": "Altman Z",
-    "beneish_m": "Beneish M",
-    "accruals_cf": "Accruals (cash flow)",
-    "composite": "Composite",
-    "accruals_bs": "Accruals (balance sheet)",
-}
+SIGNAL_LABELS = portfolios.SIGNAL_LABELS
 FACTOR_COLUMNS = ["Mkt-RF", "SMB", "HML", "RMW", "CMA", "MOM"]
 
 
@@ -418,8 +408,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     portfolios.HOLDINGS_FIN_UTIL_PATH.name)
     robust = robustness(bt.ls, fin_util, market_excess)
 
-    bt.port.to_parquet(PORTFOLIO_RETURNS_PATH, index=False)
-    bt.ls.to_parquet(LONG_SHORT_PATH, index=False)
+    bt.port.to_parquet(portfolios.PORTFOLIO_RETURNS_PATH, index=False)
+    bt.ls.to_parquet(portfolios.LONG_SHORT_PATH, index=False)
     config.REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     table.to_csv(REPORT_CSV)
     bt.buckets.to_csv(config.REPORTS_DIR / "results_buckets.csv", index=False)

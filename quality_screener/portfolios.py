@@ -48,6 +48,8 @@ log = logging.getLogger(__name__)
 
 HOLDINGS_PATH = config.PROCESSED_DIR / "holdings.parquet"
 HOLDINGS_FIN_UTIL_PATH = config.PROCESSED_DIR / "holdings_incl_fin_util.parquet"
+PORTFOLIO_RETURNS_PATH = config.PROCESSED_DIR / "portfolio_returns.parquet"
+LONG_SHORT_PATH = config.PROCESSED_DIR / "long_short_returns.parquet"
 
 N_QUANTILES = 5
 MAX_AGE_MONTHS = 15
@@ -65,6 +67,15 @@ F_GROUP, COMPOSITE = "f_group", "composite"
 # sorted like the others but kept out of the composite (robustness checks)
 EXTRA_SIGNALS: dict[str, tuple[str, int]] = {"accruals_bs": ("accruals_bs", -1)}
 SIGNAL_ORDER = [F_GROUP, *SIGNALS, COMPOSITE, *EXTRA_SIGNALS]
+SIGNAL_LABELS = {
+    "f_group": "Piotroski F (groups)",
+    "f_score": "Piotroski F (quintiles)",
+    "altman_z": "Altman Z",
+    "beneish_m": "Beneish M",
+    "accruals_cf": "Accruals (cash flow)",
+    "composite": "Composite",
+    "accruals_bs": "Accruals (balance sheet)",
+}
 
 ROW_COLUMNS = ["cik", "fiscal_year", "period_end", "availability_date"]
 HOLDINGS_COLUMNS = [
