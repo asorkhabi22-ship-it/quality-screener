@@ -51,6 +51,7 @@ F_SIGNALS = [
 ]
 ID_COLUMNS = ["cik", "period_end", "fiscal_year", "availability_date"]
 FIRM_COLUMNS = ["ticker", "name", "sector", "sic", "is_financial", "is_utility", "excluded_from_main"]
+MARKET_COLUMNS = ["shares_out_adj", "market_cap_date", "market_cap"]  # from prices.add_market_cap
 
 
 # --- helpers ------------------------------------------------------------------------------
@@ -376,10 +377,13 @@ def compute_all(panel: pd.DataFrame, firms: pd.DataFrame | None = None) -> pd.Da
     """All scores and components, one row per (cik, period_end) of the wide PIT panel.
 
     ``firms`` (the universe) adds ticker, name, sector and the financial/utility flags.
-    ``availability_date`` covers every input, including ``total_assets_lag2``.
+    ``availability_date`` covers every input, including ``total_assets_lag2``. The market
+    columns (``MARKET_COLUMNS``) are carried through when the panel has them, so portfolios
+    can compute market cap at later dates.
     """
     p = add_total_assets_lag2(panel).reset_index(drop=True)
-    parts = [p[ID_COLUMNS], piotroski(p), altman(p), beneish(p), accruals(p)]
+    market = [c for c in MARKET_COLUMNS if c in p]
+    parts = [p[ID_COLUMNS + market], piotroski(p), altman(p), beneish(p), accruals(p)]
     scores = pd.concat(parts, axis=1)
     if firms is not None:
         scores = scores.merge(firms[["cik", *FIRM_COLUMNS]], on="cik", how="left", validate="many_to_one")

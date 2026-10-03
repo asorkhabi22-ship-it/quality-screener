@@ -11,7 +11,18 @@ The research question: do high-quality firms outperform low-quality firms? Quint
 are formed on SEC **filing** dates (not fiscal period ends), using as-first-reported values, so
 the backtest only uses information that was public at the time.
 
-**Status:** project scaffold. No data pipeline or scoring logic yet.
+**Status:** data pipeline, scores and monthly quintile holdings are built; portfolio returns,
+statistics and charts (`stats.py`, `viz.py`) are next.
+
+## Pipeline
+
+```bash
+.venv/bin/python scripts/fetch_all.py         # SEC companyfacts + submissions (cached)
+.venv/bin/python scripts/build_panels.py      # point-in-time fundamentals panel
+.venv/bin/python scripts/fetch_prices.py      # Yahoo prices (cached), month-end returns
+.venv/bin/python scripts/compute_scores.py    # F, Z, Z'', M, accruals
+.venv/bin/python scripts/build_portfolios.py  # monthly quintile holdings per signal
+```
 
 ## Setup
 

@@ -53,7 +53,9 @@ quality_screener/     package
   viz.py              plotly figures
 scripts/fetch_all.py  bulk download of companyfacts + submissions (failures -> data/raw/failures.csv)
 scripts/build_panels.py  PIT + all-versions panels for the universe, coverage report in reports/
-scripts/compute_scores.py  F / Z'' / M / accruals for the universe -> data/processed/scores.parquet
+scripts/fetch_prices.py   Yahoo daily prices (cache: data/raw/prices), month-end returns, share check
+scripts/compute_scores.py  F / Z / Z'' / M / accruals (market cap from prices) -> scores.parquet
+scripts/build_portfolios.py  monthly quintile holdings per signal -> data/processed/holdings.parquet
 data/sp500_constituents.csv  Wikipedia S&P 500 snapshot (fallback when the scrape fails)
 data/raw/             cached API responses (gitignored)
 data/processed/       parquet outputs
@@ -71,7 +73,9 @@ python3 -m venv .venv
 .venv/bin/python scripts/fetch_all.py                 # whole universe
 .venv/bin/python scripts/fetch_all.py --tickers AAPL  # subset
 .venv/bin/python scripts/build_panels.py             # panels + coverage (cache only)
-.venv/bin/python scripts/compute_scores.py           # scores + summary
+.venv/bin/python scripts/fetch_prices.py             # prices (Yahoo, cached) + share check
+.venv/bin/python scripts/compute_scores.py           # scores + summary (needs cached prices)
+.venv/bin/python scripts/build_portfolios.py         # holdings (--include-fin-util: robustness)
 ```
 
 Homebrew Python is PEP 668 "externally managed": always install into `.venv`, never system Python.

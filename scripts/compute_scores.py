@@ -1,7 +1,8 @@
 """Compute all quality scores for the universe and print a summary.
 
-Reads data/processed/panel_pit.parquet and universe.parquet (run scripts/build_panels.py
-first); writes data/processed/scores.parquet.
+Reads data/processed/panel_pit.parquet and universe.parquet (scripts/build_panels.py) and
+the cached daily prices (scripts/fetch_prices.py) for market cap, which Altman's original Z
+needs; writes data/processed/scores.parquet.
 
 Usage:
     python scripts/compute_scores.py
@@ -14,9 +15,9 @@ from collections.abc import Sequence
 
 import pandas as pd
 
-from quality_screener import config, panel, scores, universe
+from quality_screener import config, panel, prices, scores, universe
 
-SCORE_COLUMNS = ["f_score", "z2_score", "m_score", "accruals_cf", "accruals_bs"]
+SCORE_COLUMNS = ["f_score", "z_score", "z2_score", "m_score", "accruals_cf", "accruals_bs"]
 
 
 def main_sample(scored: pd.DataFrame) -> pd.DataFrame:
@@ -38,6 +39,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     pit = pd.read_parquet(panel.PIT_PATH)
     firms = pd.read_parquet(universe.UNIVERSE_PATH)
+    daily = prices.load_daily([*firms["ticker"], prices.BENCHMARK])
+    pit = prices.add_market_cap(pit, firms, daily, prices.trading_calendar(daily))
     scored = scores.compute_all(pit, firms)
     scored.to_parquet(scores.SCORES_PATH, index=False)
     print(f"wrote {len(scored)} firm-years to {scores.SCORES_PATH.relative_to(config.PROJECT_ROOT)}")
@@ -54,6 +57,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     f_counts = in_window["f_score"].round().value_counts().sort_index().astype(int)
     print((f_counts / f_counts.sum() * 100).round(1).rename("pct").to_frame().T.to_string())
 
+    has_shares = in_window["shares_out_adj"].notna()
+    print(f"\nMarket cap available for {in_window['market_cap'].notna().mean():.1%} of firm-years "
+          f"({(has_shares & in_window['market_cap'].isna()).sum()} with shares but no price)")
+    print(f"Altman Z zones: {in_window['z_zone'].value_counts(normalize=True).round(3).to_dict()}")
     print(f"\nM-score flag rate (M > {scores.M_THRESHOLD}): {in_window['m_flag'].mean():.1%}")
     print("\n10 highest M-scores (main sample, winsorised indices):")
     print(top_m_scores(in_window).round(3).to_string())
