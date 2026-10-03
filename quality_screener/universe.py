@@ -43,6 +43,13 @@ WIKIPEDIA_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 FALLBACK_CSV = config.DATA_DIR / "sp500_constituents.csv"
 FALLBACK_SNAPSHOT_DATE = "2026-10-02"
 UNIVERSE_PATH = config.PROCESSED_DIR / "universe.parquet"
+
+# New registrant CIK -> the predecessor that filed the historical 10-Ks. SEC's ticker map points
+# a ticker at its current registrant; after a holding-company reorganisation or similar, that
+# CIK has no annual history yet. Add entries when panel_failures.csv shows such a case.
+PREDECESSOR_CIKS: dict[str, str] = {
+    "0002115436": "0000034088",  # ExxonMobil Holdings Corp (2026 reorg) -> Exxon Mobil Corp
+}
 MIN_CONSTITUENTS = 450  # sanity floor: a smaller scraped table means the page layout changed
 
 FINANCIAL_SIC = (6000, 6999)
@@ -108,11 +115,13 @@ def normalize_ticker(ticker: str) -> str:
 
 
 def map_tickers_to_ciks(constituents: pd.DataFrame, ticker_map: pd.DataFrame) -> pd.DataFrame:
-    """Attach ``cik`` and SEC ``title`` to each ticker; tickers SEC does not know are dropped."""
+    """Attach ``cik`` and SEC ``title`` to each ticker; tickers SEC does not know are dropped.
+    CIKs listed in ``PREDECESSOR_CIKS`` are swapped for the registrant that filed the history."""
     left = constituents.assign(ticker=constituents["ticker"].map(normalize_ticker))
     right = ticker_map.assign(ticker=ticker_map["ticker"].map(normalize_ticker))
     right = right.drop_duplicates("ticker")[["ticker", "cik", "title"]]
     merged = left.merge(right, on="ticker", how="left", validate="many_to_one")
+    merged["cik"] = merged["cik"].replace(PREDECESSOR_CIKS)
     unmapped = merged.loc[merged["cik"].isna(), "ticker"].tolist()
     if unmapped:
         log.warning("%d tickers missing from SEC ticker map, dropped: %s", len(unmapped), unmapped)

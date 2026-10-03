@@ -152,3 +152,10 @@ def test_load_or_build_universe_reads_saved_file(tmp_path: Path) -> None:
     saved.to_parquet(path, index=False)
     got = universe.load_or_build_universe(client=None, path=path)  # type: ignore[arg-type]
     pd.testing.assert_frame_equal(got, saved)
+
+
+def test_predecessor_cik_replaces_new_registrant(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(universe, "PREDECESSOR_CIKS", {"0000000009": "0000000001"})
+    ticker_map = pd.DataFrame({"cik": ["0000000009"], "ticker": ["NEWCO"], "title": ["NewCo Holdings"]})
+    mapped = universe.map_tickers_to_ciks(pd.DataFrame({"ticker": ["NEWCO"]}), ticker_map)
+    assert mapped["cik"].tolist() == ["0000000001"]

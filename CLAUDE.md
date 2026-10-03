@@ -49,6 +49,7 @@ quality_screener/     package
   stats.py            return statistics and tests
   viz.py              plotly figures
 scripts/fetch_all.py  bulk download of companyfacts + submissions (failures -> data/raw/failures.csv)
+scripts/build_panels.py  PIT + all-versions panels for the universe, coverage report in reports/
 data/sp500_constituents.csv  Wikipedia S&P 500 snapshot (fallback when the scrape fails)
 data/raw/             cached API responses (gitignored)
 data/processed/       parquet outputs
@@ -65,6 +66,7 @@ python3 -m venv .venv
 .venv/bin/pytest
 .venv/bin/python scripts/fetch_all.py                 # whole universe
 .venv/bin/python scripts/fetch_all.py --tickers AAPL  # subset
+.venv/bin/python scripts/build_panels.py             # panels + coverage (cache only)
 ```
 
 Homebrew Python is PEP 668 "externally managed": always install into `.venv`, never system Python.
