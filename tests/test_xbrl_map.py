@@ -13,6 +13,7 @@ REQUESTED_FIELDS = {
     "income_cont_ops", "cfo", "equity_issued", "total_assets", "current_assets",
     "current_liabilities", "total_liabilities", "receivables", "ppe_net", "cash",
     "long_term_debt", "retained_earnings", "equity", "shares_out",
+    "debt_current", "taxes_payable",  # Sloan (1996) balance-sheet accruals
 }
 
 
@@ -84,3 +85,17 @@ def test_long_term_debt_derivation_needs_both_inputs() -> None:
     got = rule.formula(w)
     assert got.iloc[0] == 450.0
     assert math.isnan(got.iloc[1])  # untagged current portion is not treated as 0
+
+
+def test_debt_current_falls_back_in_order() -> None:
+    w = pd.DataFrame(
+        {
+            "short_term_borrowings": [10.0, math.nan, math.nan],
+            "commercial_paper": [math.nan, 5.0, math.nan],
+            "lt_debt_current": [3.0, 3.0, 3.0],
+        }
+    )
+    stb, cp, alone = (rule.formula(w) for rule in DERIVATIONS["debt_current"])
+    assert stb.iloc[0] == 13.0 and cp.iloc[1] == 8.0
+    # current LTD alone only where no short-term borrowings line is tagged at all
+    assert math.isnan(alone.iloc[0]) and math.isnan(alone.iloc[1]) and alone.iloc[2] == 3.0

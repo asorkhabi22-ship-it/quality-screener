@@ -12,10 +12,12 @@ Per company:
 5. ``resolve_tags_per_filing`` + ``add_derived_fields``: one value per (field, period_end,
    filing), first tag in priority order, else a fallback formula on that same filing.
    Result: ``all_versions`` (every filing's value; needed for the restatement study).
-6. ``first_reported``: per (field, period_end) the value from the EARLIEST filing -> ``pit_long``.
+6. ``first_reported``: per (field, period_end) the value from the EARLIEST filing.
    The tag is resolved inside each filing *before* choosing the earliest filing, so a later
    comparative under a higher-priority tag (e.g. ASC 606 revenue) cannot displace the
-   originally reported number.
+   originally reported number. ``drop_late_values`` then anchors each row to its main 10-K
+   and sets aside values first reported more than 90 days after it -> ``pit_long``
+   (set-aside values -> ``late_values``).
 7. ``to_wide`` + ``add_lags``: one row per (cik, period_end) with prior-year ``*_lag1``
    values matched on dates. ``availability_date`` is the latest ``filed`` date among all
    values in the row, lags included. It is a filing date: the earliest tradable date is the
@@ -26,7 +28,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +59,7 @@ SCALE_JUMP = 500.0
 SCALE_CHECK_FIELDS = ("revenue", "total_assets", "current_assets", "cash", "shares_out")
 MIN_PERIOD_GAP_DAYS = 300
 LATE_ROW_DAYS = 90
+MAX_LATE_DAYS = 90
 
 FACT_COLUMNS = ["tag", "unit", "start", "end", "val", "accn", "fy", "fp", "form", "filed", "frame"]
 VERSION_COLUMNS = ["cik", "field", "period_end", "val", "source_tag", "accn", "form", "filed"]
@@ -65,6 +68,7 @@ ROW_META = ["cik", "period_end", "fiscal_year", "availability_date", "first_file
 PIT_PATH = config.PROCESSED_DIR / "panel_pit.parquet"
 PIT_LONG_PATH = config.PROCESSED_DIR / "panel_pit_long.parquet"
 ALL_VERSIONS_PATH = config.PROCESSED_DIR / "panel_all_versions.parquet"
+LATE_VALUES_PATH = config.PROCESSED_DIR / "panel_late_values.parquet"
 
 
 @dataclass(frozen=True)
@@ -72,6 +76,7 @@ class Panel:
     all_versions: pd.DataFrame  # long: every filing's value per (cik, field, period_end)
     pit_long: pd.DataFrame  # long: as-first-reported value per (cik, field, period_end)
     pit: pd.DataFrame  # wide: one row per (cik, period_end), plus *_lag1 columns
+    late_values: pd.DataFrame  # first-reported values set aside as filed too late (audit)
 
 
 # --- 1-4: facts -> mapped rows ------------------------------------------------------------
@@ -186,6 +191,38 @@ def first_reported(versions: pd.DataFrame) -> pd.DataFrame:
     return first.drop(columns="_amended").reset_index(drop=True)
 
 
+def drop_late_values(
+    pit_long: pd.DataFrame, max_delay_days: int = MAX_LATE_DAYS
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Split first-reported values into (usable, late).
+
+    Each (cik, period_end) row is anchored to its main filing: the one that supplied the most
+    output-field values (ties: earliest). A value first filed more than ``max_delay_days``
+    after that filing, typically one tagged only as a comparative in the next year's 10-K,
+    was not public when the rest of the row was. Keeping it would delay the whole row by about
+    a year, so it is set aside instead: NaN in the PIT panel, still in ``all_versions``, and
+    returned with its delay for audit. Amendments inside the window (a 10-K/A fixing XBRL)
+    are kept and move the row's availability_date to their own filing date.
+    """
+    anchor = _primary_filing(pit_long[pit_long["field"].isin(OUTPUT_FIELDS)])["filed"]
+    anchored = pit_long.join(anchor.rename("anchor_filed"), on=["cik", "period_end"])
+    delay = (anchored["filed"] - anchored["anchor_filed"]).dt.days
+    # helper fields never reach the wide panel, so only output fields can delay a row
+    late = (delay > max_delay_days) & pit_long["field"].isin(OUTPUT_FIELDS)
+    kept = pit_long[~late.to_numpy()].reset_index(drop=True)
+    dropped = anchored[late].assign(delay_days=delay[late]).reset_index(drop=True)
+    return kept, dropped
+
+
+def _log_late_values(late: pd.DataFrame, cik: str) -> None:
+    if len(late):
+        fields = late["field"].value_counts().to_dict()
+        log.info(
+            "CIK %s: %d value(s) first reported >%d days after their row's main 10-K left out "
+            "of the PIT panel: %s", cik, len(late), MAX_LATE_DAYS, fields,
+        )
+
+
 def fiscal_year(period_end: pd.Series) -> pd.Series:
     """Compustat FYEAR convention: a fiscal year ending January-May is labelled with the prior
     calendar year (Walmart's year ending 2024-01-31 is fiscal 2023)."""
@@ -200,19 +237,21 @@ def to_wide(pit_long: pd.DataFrame) -> pd.DataFrame:
     values = pit.pivot(index=keys, columns="field", values="val").reindex(columns=list(OUTPUT_FIELDS))
     values.columns.name = None
     dates = pit.groupby(keys)["filed"].agg(availability_date="max", first_filed="min")
-    wide = values.join(dates).join(_primary_filing(pit)).reset_index()
+    wide = values.join(dates).join(_primary_filing(pit)[["accn", "form"]]).reset_index()
     wide["fiscal_year"] = fiscal_year(wide["period_end"])
     return wide[[*ROW_META, *OUTPUT_FIELDS]]
 
 
 def _primary_filing(pit: pd.DataFrame) -> pd.DataFrame:
+    """Per (cik, period_end): accn, form and filed date of the filing supplying most values."""
     counts = pit.groupby(["cik", "period_end", "accn", "form"], as_index=False).agg(
         n=("val", "size"), filed=("filed", "min")
     )
     ranked = counts.sort_values(
         ["cik", "period_end", "n", "filed"], ascending=[True, True, False, True]
     )
-    return ranked.drop_duplicates(["cik", "period_end"]).set_index(["cik", "period_end"])[["accn", "form"]]
+    best = ranked.drop_duplicates(["cik", "period_end"]).set_index(["cik", "period_end"])
+    return best[["accn", "form", "filed"]]
 
 
 def add_lags(wide: pd.DataFrame) -> pd.DataFrame:
@@ -288,10 +327,11 @@ def build_panel_from_facts(companyfacts: dict[str, Any], cik: int | str) -> Pane
         raise ValueError(f"CIK {cik10}: no annual 10-K facts for any mapped tag")
     versions = add_derived_fields(resolve_tags_per_filing(mapped, cik10))
     check_balance_identity(versions, cik10)
-    pit_long = first_reported(versions)
+    pit_long, late = drop_late_values(first_reported(versions))
+    _log_late_values(late, cik10)
     pit = add_lags(to_wide(pit_long))
     check_wide(pit, cik10)
-    return Panel(all_versions=versions, pit_long=pit_long, pit=pit)
+    return Panel(all_versions=versions, pit_long=pit_long, pit=pit, late_values=late)
 
 
 def build_panel(cik: int | str, client: EdgarClient | None = None) -> Panel:
@@ -313,8 +353,7 @@ def build_universe_panel(
             log.warning("CIK %s failed: %s", cik, exc)
             failures.append({"cik": cik, "error": f"{type(exc).__name__}: {exc}"})
     panel = Panel(
-        *(pd.concat([getattr(p, name) for p in parts], ignore_index=True)
-          for name in ("all_versions", "pit_long", "pit"))
+        *(pd.concat([getattr(p, f.name) for p in parts], ignore_index=True) for f in fields(Panel))
     )
     return panel, pd.DataFrame(failures, columns=["cik", "error"])
 
@@ -324,6 +363,7 @@ def save_panel(panel: Panel, out_dir: Path = config.PROCESSED_DIR) -> None:
     panel.pit.to_parquet(out_dir / PIT_PATH.name, index=False)
     panel.pit_long.to_parquet(out_dir / PIT_LONG_PATH.name, index=False)
     panel.all_versions.to_parquet(out_dir / ALL_VERSIONS_PATH.name, index=False)
+    panel.late_values.to_parquet(out_dir / LATE_VALUES_PATH.name, index=False)
 
 
 # --- coverage report ----------------------------------------------------------------------

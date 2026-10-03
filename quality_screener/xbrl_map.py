@@ -48,9 +48,15 @@ FIELDS: dict[str, FieldSpec] = {
         "RevenueFromContractWithCustomerIncludingAssessedTax",
         "SalesRevenueNet",
         "SalesRevenueGoodsNet",
+        # industry total-revenue lines, found where the original 10-K used them (B pass)
+        "SalesRevenueServicesNet",
+        "RealEstateRevenueNet",
+        "RegulatedAndUnregulatedOperatingRevenue",
+        "HealthCareOrganizationRevenue",
     )),
     "cogs": FieldSpec("flow", _gaap(
         "CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold", "CostOfServices",
+        "CostOfGoodsSoldExcludingDepreciationDepletionAndAmortization",
     )),
     "gross_profit": FieldSpec("flow", _gaap("GrossProfit")),
     "sga": FieldSpec("flow", _gaap("SellingGeneralAndAdministrativeExpense")),
@@ -63,7 +69,9 @@ FIELDS: dict[str, FieldSpec] = {
     "ebit": FieldSpec("flow", _gaap("OperatingIncomeLoss")),
     "net_income": FieldSpec("flow", _gaap("NetIncomeLoss")),
     "income_cont_ops": FieldSpec("flow", _gaap(
-        "IncomeLossFromContinuingOperations", "NetIncomeLoss",
+        "IncomeLossFromContinuingOperations",
+        "IncomeLossFromContinuingOperationsIncludingPortionAttributableToNoncontrollingInterest",
+        "NetIncomeLoss",
     )),
     "cfo": FieldSpec("flow", _gaap(
         "NetCashProvidedByUsedInOperatingActivities",
@@ -80,26 +88,39 @@ FIELDS: dict[str, FieldSpec] = {
         "ReceivablesNetCurrent",
         "AccountsNotesAndLoansReceivableNetCurrent",
         "AccountsAndOtherReceivablesNetCurrent",
+        "AccountsReceivableNet",  # unclassified balance sheets
     )),
     "ppe_net": FieldSpec("stock", _gaap(
         "PropertyPlantAndEquipmentNet",
         # ASC 842 (2019+): owned PP&E plus finance-lease right-of-use assets, net
         "PropertyPlantAndEquipmentAndFinanceLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization",
+        "PublicUtilitiesPropertyPlantAndEquipmentNet",
     )),
     "cash": FieldSpec("stock", _gaap(
         "CashAndCashEquivalentsAtCarryingValue",
         "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+        "Cash",
+        "CashAndDueFromBanks",
+        "CashAndCashEquivalentsAtCarryingValueIncludingDiscontinuedOperations",
     )),
     "long_term_debt": FieldSpec("stock", _gaap(
         "LongTermDebtNoncurrent", "LongTermDebtAndCapitalLeaseObligations",  # both exclude current
     )),
-    "retained_earnings": FieldSpec("stock", _gaap("RetainedEarningsAccumulatedDeficit")),
-    "equity": FieldSpec("stock", _gaap("StockholdersEquity")),
+    "retained_earnings": FieldSpec("stock", _gaap(
+        "RetainedEarningsAccumulatedDeficit", "RetainedEarningsUnappropriated",
+    )),
+    # A firm that tags only the NCI-inclusive total has no NCI to split out.
+    "equity": FieldSpec("stock", _gaap(
+        "StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+    )),
     "shares_out": FieldSpec(
         "stock",
         ("dei:EntityCommonStockSharesOutstanding", "us-gaap:CommonStockSharesOutstanding"),
         unit="shares",
     ),
+    # Sloan (1996) balance-sheet accruals: debt in current liabilities and income taxes payable
+    "debt_current": FieldSpec("stock", _gaap("DebtCurrent")),
+    "taxes_payable": FieldSpec("stock", _gaap("AccruedIncomeTaxesCurrent", "TaxesPayableCurrent")),
     # --- helpers: inputs to derivations and the balance-sheet identity check ---
     "liab_and_equity": FieldSpec("stock", _gaap("LiabilitiesAndStockholdersEquity"), helper=True),
     "equity_incl_nci": FieldSpec(
@@ -116,6 +137,8 @@ FIELDS: dict[str, FieldSpec] = {
     "ltd_lease_current": FieldSpec(
         "stock", _gaap("LongTermDebtAndCapitalLeaseObligationsCurrent"), helper=True
     ),
+    "short_term_borrowings": FieldSpec("stock", _gaap("ShortTermBorrowings"), helper=True),
+    "commercial_paper": FieldSpec("stock", _gaap("CommercialPaper"), helper=True),
     "selling_marketing": FieldSpec("flow", _gaap("SellingAndMarketingExpense"), helper=True),
     "general_admin": FieldSpec("flow", _gaap("GeneralAndAdministrativeExpense"), helper=True),
     "profit_loss": FieldSpec("flow", _gaap("ProfitLoss"), helper=True),  # incl. NCI
@@ -178,6 +201,25 @@ DERIVATIONS: dict[str, tuple[Derivation, ...]] = {
             "derived:LiabilitiesAndStockholdersEquity-total_equity",
             ("liab_and_equity", "equity", "equity_incl_nci", "minority_interest"),
             lambda w: w["liab_and_equity"] - total_equity(w),
+        ),
+    ),
+    "debt_current": (
+        Derivation(
+            "derived:ShortTermBorrowings+LongTermDebtCurrent",
+            ("short_term_borrowings", "lt_debt_current"),
+            lambda w: w["short_term_borrowings"] + w["lt_debt_current"],
+        ),
+        Derivation(
+            "derived:CommercialPaper+LongTermDebtCurrent",
+            ("commercial_paper", "lt_debt_current"),
+            lambda w: w["commercial_paper"] + w["lt_debt_current"],
+        ),
+        Derivation(
+            "derived:LongTermDebtCurrent(no short-term borrowings tagged)",
+            ("lt_debt_current", "short_term_borrowings", "commercial_paper"),
+            lambda w: w["lt_debt_current"].where(
+                w["short_term_borrowings"].isna() & w["commercial_paper"].isna()
+            ),
         ),
     ),
     "long_term_debt": (

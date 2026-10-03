@@ -19,6 +19,9 @@ These apply to all work in this repo. Do not relax them without an explicit inst
    filings (later 10-Ks repeat prior years as comparatives, sometimes restated), the backtest
    uses the value from the EARLIEST filing. Keep all versions in the raw panel, because the
    restatement case study needs them.
+   A value first reported more than 90 days after its row's main 10-K (typically tagged only as
+   a comparative in the next year's 10-K) is left out of the PIT panel, NOT allowed to delay
+   the whole row; it stays in `panel_all_versions` and is listed in `panel_late_values`.
 
 3. **sec.gov HTTP discipline.** Every HTTP request to sec.gov sends the User-Agent from
    `quality_screener/config.py`, is rate-limited (`MAX_REQUESTS_PER_SEC`), retried with
@@ -50,6 +53,7 @@ quality_screener/     package
   viz.py              plotly figures
 scripts/fetch_all.py  bulk download of companyfacts + submissions (failures -> data/raw/failures.csv)
 scripts/build_panels.py  PIT + all-versions panels for the universe, coverage report in reports/
+scripts/compute_scores.py  F / Z'' / M / accruals for the universe -> data/processed/scores.parquet
 data/sp500_constituents.csv  Wikipedia S&P 500 snapshot (fallback when the scrape fails)
 data/raw/             cached API responses (gitignored)
 data/processed/       parquet outputs
@@ -67,6 +71,7 @@ python3 -m venv .venv
 .venv/bin/python scripts/fetch_all.py                 # whole universe
 .venv/bin/python scripts/fetch_all.py --tickers AAPL  # subset
 .venv/bin/python scripts/build_panels.py             # panels + coverage (cache only)
+.venv/bin/python scripts/compute_scores.py           # scores + summary
 ```
 
 Homebrew Python is PEP 668 "externally managed": always install into `.venv`, never system Python.

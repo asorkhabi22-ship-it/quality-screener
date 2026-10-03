@@ -6,6 +6,7 @@ Outputs:
     data/processed/panel_pit.parquet           wide, one row per (cik, period_end), with *_lag1
     data/processed/panel_pit_long.parquet      long, first-reported value + source_tag
     data/processed/panel_all_versions.parquet  long, every filing's value (restatements)
+    data/processed/panel_late_values.parquet   values left out as reported >90d after the 10-K
     data/processed/panel_failures.csv          CIKs that could not be built
     reports/coverage_by_year.csv               % non-null by field x fiscal year (main sample)
     reports/coverage_by_year_fin_util.csv      same, financials + utilities
@@ -62,6 +63,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         "%d firms, %d firm-years, %d failures; main-sample coverage %%, FY%d-FY%d:\n%s",
         built.pit["cik"].nunique(), len(built.pit), len(failures), years[0], years[-1],
         coverage.loc[KEY_FIELDS, years].to_string(),
+    )
+    late = built.late_values
+    log.info(
+        "%d late-reported values left out of the PIT panel (in %d firm-years); most common: %s",
+        len(late), late.groupby(["cik", "period_end"]).ngroups,
+        late["field"].value_counts().head(5).to_dict(),
     )
     network_note = "no" if client.network_calls == 0 else str(client.network_calls)
     log.info("%s network calls", network_note)

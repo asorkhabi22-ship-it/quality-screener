@@ -255,15 +255,54 @@ def test_lag_matches_53_week_year_within_tolerance() -> None:
     assert p.pit.set_index("fiscal_year").loc[2023, "revenue_lag1"] == 1
 
 
-def test_availability_is_latest_filed_across_row_and_lag() -> None:
-    p = build(
-        annual_revenue(2021, 10, "2022-02-01", "A21"),
-        ("us-gaap:NetIncomeLoss", fact(1, start="2021-01-01", end="2021-12-31", filed="2023-06-01", accn="X")),
-        annual_revenue(2022, 20, "2023-02-01", "A22"),
-    )
+def original_10k(year: int, filed: str, accn: str, revenue: float) -> list[tuple[str, dict[str, Any]]]:
+    """A 10-K reporting revenue, CFO and assets for ``year``."""
+    period = dict(start=f"{year}-01-01", end=f"{year}-12-31", filed=filed, accn=accn)
+    return [
+        ("us-gaap:Revenues", fact(revenue, **period)),
+        ("us-gaap:NetCashProvidedByUsedInOperatingActivities", fact(revenue / 10, **period)),
+        ("us-gaap:Assets", fact(revenue * 2, end=f"{year}-12-31", filed=filed, accn=accn)),
+    ]
+
+
+def test_value_first_reported_a_year_later_is_left_out_not_delaying_the_row() -> None:
+    late_ni = ("us-gaap:NetIncomeLoss",
+               fact(1, start="2021-01-01", end="2021-12-31", filed="2023-02-01", accn="A22"))
+    p = build(*original_10k(2021, "2022-02-01", "A21", 10), late_ni,
+              *original_10k(2022, "2023-02-01", "A22", 20))
+    fy21 = p.pit.set_index("fiscal_year").loc[2021]
+    assert fy21["availability_date"] == TS("2022-02-01")  # not 2023-02-01
+    assert math.isnan(fy21["net_income"])
+    # set aside for audit, and still present in all_versions
+    late = p.late_values
+    assert set(late["field"]) == {"net_income", "income_cont_ops"}
+    assert (late["delay_days"] == 365).all()
+    v = p.all_versions
+    assert v.loc[(v["field"] == "net_income") & (v["accn"] == "A22"), "period_end"].tolist() == [TS("2021-12-31")]
+
+
+def test_amendment_within_90_days_is_kept_and_moves_availability() -> None:
+    amended_ni = ("us-gaap:NetIncomeLoss",
+                  fact(1, start="2021-01-01", end="2021-12-31", filed="2022-03-15",
+                       accn="A21A", form="10-K/A"))
+    p = build(*original_10k(2021, "2022-02-01", "A21", 10), amended_ni)
+    row = p.pit.iloc[0]
+    assert row["net_income"] == 1
+    assert row["availability_date"] == TS("2022-03-15")
+    assert p.late_values.empty
+
+
+def test_availability_includes_the_lag_row() -> None:
+    """Prior row (late filer) gets a 10-K/A after the current 10-K: the current row can only
+    be used once its lag values are public."""
+    amended = ("us-gaap:NetIncomeLoss",
+               fact(1, start="2021-01-01", end="2021-12-31", filed="2023-01-30",
+                    accn="A21A", form="10-K/A"))
+    p = build(*original_10k(2021, "2022-12-01", "A21", 10), amended,
+              *original_10k(2022, "2023-01-15", "A22", 20))
     by_year = p.pit.set_index("fiscal_year")
-    assert by_year.loc[2021, "availability_date"] == TS("2023-06-01")  # late net income
-    assert by_year.loc[2022, "availability_date"] == TS("2023-06-01")  # via net_income_lag1
+    assert by_year.loc[2021, "availability_date"] == TS("2023-01-30")
+    assert by_year.loc[2022, "availability_date"] == TS("2023-01-30")  # via the lag row
 
 
 @pytest.mark.parametrize(
