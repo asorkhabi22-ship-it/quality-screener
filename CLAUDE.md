@@ -22,6 +22,11 @@ These apply to all work in this repo. Do not relax them without an explicit inst
    A value first reported more than 90 days after its row's main 10-K (typically tagged only as
    a comparative in the next year's 10-K) is left out of the PIT panel, NOT allowed to delay
    the whole row; it stays in `panel_all_versions` and is listed in `panel_late_values`.
+   Prior-year values in a row (`*_lag1`, used for changes and averages) come from the
+   comparatives in the same 10-K as the current year when it reports them, so each ratio
+   compares one set of statements (after a restatement, both years restated); otherwise the
+   prior year's as-first-reported value. Both are public on the row's filing date. (Changed
+   after the SMCI case study showed a restated year over an unrestated base hid an M-score flag.)
 
 3. **sec.gov HTTP discipline.** Every HTTP request to sec.gov sends the User-Agent from
    `quality_screener/config.py`, is rate-limited (`MAX_REQUESTS_PER_SEC`), retried with

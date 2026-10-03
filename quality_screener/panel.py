@@ -19,7 +19,10 @@ Per company:
    and sets aside values first reported more than 90 days after it -> ``pit_long``
    (set-aside values -> ``late_values``).
 7. ``to_wide`` + ``add_lags``: one row per (cik, period_end) with prior-year ``*_lag1``
-   values matched on dates. ``availability_date`` is the latest ``filed`` date among all
+   values matched on dates. Each lag value is the prior-period comparative in the row's own
+   10-K when that filing reports it (so a change ratio compares two years from one set of
+   statements, restated together if the firm restated), else the prior row's
+   as-first-reported value. ``availability_date`` is the latest ``filed`` date among all
    values in the row, lags included. It is a filing date: the earliest tradable date is the
    next trading day (applied when joining prices).
 """
@@ -254,9 +257,17 @@ def _primary_filing(pit: pd.DataFrame) -> pd.DataFrame:
     return best[["accn", "form", "filed"]]
 
 
-def add_lags(wide: pd.DataFrame) -> pd.DataFrame:
+def add_lags(wide: pd.DataFrame, versions: pd.DataFrame | None = None) -> pd.DataFrame:
     """Join the prior fiscal year as ``*_lag1``: the row whose period_end is 12 months earlier
     (+/- 20 days), matched on dates rather than row order, so a missing year leaves NaN.
+
+    With ``versions`` (every filing's values, ``all_versions``), each lag value is replaced by
+    the comparative for that prior period in the row's own primary filing (``accn``) when the
+    filing reports it. Ratios of this year to last year then compare figures from one set of
+    statements: after a restatement both years are on the restated basis, instead of a
+    restated current year over an unrestated base year. Those comparatives are public on the
+    row's own filing date. ``lag1_same_filing`` counts the fields whose lag came from the
+    row's own filing; the rest keep the prior row's as-first-reported value.
 
     ``availability_date`` becomes the later of the row's and the lag row's, so no value in the
     row is used before it was filed.
@@ -275,7 +286,26 @@ def add_lags(wide: pd.DataFrame) -> pd.DataFrame:
     )
     merged["availability_date"] = merged[["availability_date", "availability_date_lag1"]].max(axis=1)
     merged = merged.drop(columns=["_target", "availability_date_lag1"])
+    if versions is not None:
+        merged = _same_filing_lags(merged, versions)
     return merged.sort_values(["cik", "period_end"]).reset_index(drop=True)
+
+
+def _same_filing_lags(merged: pd.DataFrame, versions: pd.DataFrame) -> pd.DataFrame:
+    """Overwrite ``*_lag1`` with the row's own filing's comparatives where it has them."""
+    comps = versions[versions["field"].isin(OUTPUT_FIELDS)]
+    comps = comps.groupby(["cik", "accn", "period_end", "field"])["val"].first().unstack("field")
+    comps = comps.reindex(columns=list(OUTPUT_FIELDS)).add_suffix("_same")
+    comps.index = comps.index.set_names(["cik", "accn", "period_end_lag1"])
+    found = merged.join(comps, on=["cik", "accn", "period_end_lag1"])
+    out = merged.copy()
+    count = pd.Series(0, index=out.index)
+    for field in OUTPUT_FIELDS:
+        same = found[f"{field}_same"]
+        out[f"{field}_lag1"] = same.combine_first(out[f"{field}_lag1"])
+        count += same.notna().astype(int)
+    out["lag1_same_filing"] = count
+    return out
 
 
 # --- sanity checks: log, never drop -------------------------------------------------------
@@ -329,7 +359,7 @@ def build_panel_from_facts(companyfacts: dict[str, Any], cik: int | str) -> Pane
     check_balance_identity(versions, cik10)
     pit_long, late = drop_late_values(first_reported(versions))
     _log_late_values(late, cik10)
-    pit = add_lags(to_wide(pit_long))
+    pit = add_lags(to_wide(pit_long), versions)
     check_wide(pit, cik10)
     return Panel(all_versions=versions, pit_long=pit_long, pit=pit, late_values=late)
 

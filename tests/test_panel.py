@@ -95,10 +95,34 @@ def test_period_comes_from_end_date_not_fy(restated: Panel) -> None:
     assert v.loc[v["val"] == 95, "period_end"].tolist() == [TS("2022-12-31")]
 
 
-def test_lag_columns_use_prior_year(restated: Panel) -> None:
-    row = restated.pit.set_index("period_end").loc[TS("2023-12-31")]
-    assert row["revenue_lag1"] == 100  # first-reported prior year, not the restated 95
+def test_lag_comes_from_the_same_filing_as_the_current_year(restated: Panel) -> None:
+    """FY2023's 10-K (A23) reports FY2022 revenue restated to 95: the growth ratio compares
+    120 with 95, both from A23, not with the 100 first reported a year earlier. The FY2022
+    row itself keeps its first-reported 100."""
+    by_end = restated.pit.set_index("period_end")
+    row = by_end.loc[TS("2023-12-31")]
+    assert row["revenue_lag1"] == 95
     assert row["period_end_lag1"] == TS("2022-12-31")
+    assert row["lag1_same_filing"] == 1
+    assert by_end.loc[TS("2022-12-31"), "revenue"] == 100
+
+
+def test_lag_falls_back_to_prior_row_when_filing_has_no_comparative() -> None:
+    p = build(
+        ("us-gaap:Revenues", fact(100, **FY22, **A22)),
+        ("us-gaap:NetIncomeLoss", fact(7, **FY22, **A22)),
+        ("us-gaap:Revenues", fact(95, **FY22, **A23)),  # A23 repeats revenue, not net income
+        ("us-gaap:Revenues", fact(120, **FY23, **A23)),
+        ("us-gaap:NetIncomeLoss", fact(9, **FY23, **A23)),
+    )
+    row = p.pit.set_index("period_end").loc[TS("2023-12-31")]
+    assert (row["revenue_lag1"], row["net_income_lag1"]) == (95, 7)
+
+
+def test_without_versions_lags_are_the_prior_rows_first_reported_values(restated: Panel) -> None:
+    wide = panel.to_wide(restated.pit_long)
+    row = panel.add_lags(wide).set_index("period_end").loc[TS("2023-12-31")]
+    assert row["revenue_lag1"] == 100 and "lag1_same_filing" not in row
 
 
 # --- tag priority vs filing order ---------------------------------------------------------

@@ -108,12 +108,15 @@ def restated_long(versions: pd.DataFrame, cik: str, restated_accn: str) -> pd.Da
 
 
 def scores_for(
-    long: pd.DataFrame, market_cap: pd.Series | None = None, firms: pd.DataFrame | None = None
+    long: pd.DataFrame, market_cap: pd.Series | None = None, firms: pd.DataFrame | None = None,
+    versions: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Scores (``scores.compute_all``) for one firm's long panel. ``market_cap`` (indexed by
     period_end) is attached so both views use the same price; on a single firm the Beneish
-    indices are not winsorised (fewer than ``WINSOR_MIN_OBS`` observations)."""
-    wide = panel.add_lags(panel.to_wide(long))
+    indices are not winsorised (fewer than ``WINSOR_MIN_OBS`` observations). With
+    ``versions``, prior-year values come from each row's own filing (``panel.add_lags``);
+    without, from the prior row as first reported (the rule before this case study)."""
+    wide = panel.add_lags(panel.to_wide(long), versions)
     if market_cap is not None:
         wide["market_cap"] = wide["period_end"].map(market_cap)
     return scores.compute_all(wide, firms)
