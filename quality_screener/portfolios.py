@@ -21,6 +21,8 @@ Signals, oriented so that a higher bucket is always higher quality (Q5 = best):
                   signals (at least ``COMPOSITE_MIN_SIGNALS``), in the spirit of Asness,
                   Frazzini and Pedersen (2019), Quality minus junk, Review of Accounting
                   Studies 24, 34-112.
+- ``accruals_bs`` quintiles of -balance-sheet accruals (Sloan's original measure), a
+                  robustness check only: not part of the composite.
 
 Piotroski's own extreme portfolios are F 0-1 and 8-9 among high book-to-market firms. With
 about 360 large caps those groups are nearly empty, so the coarser 0-3 / 4-6 / 7-9 split is
@@ -32,6 +34,8 @@ Financials, utilities and firms with unknown SIC are left out unless ``include_f
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -39,6 +43,8 @@ import pandas as pd
 
 from quality_screener import config
 from quality_screener.prices import as_days, month_end_trading_days, previous_trading_day
+
+log = logging.getLogger(__name__)
 
 HOLDINGS_PATH = config.PROCESSED_DIR / "holdings.parquet"
 HOLDINGS_FIN_UTIL_PATH = config.PROCESSED_DIR / "holdings_incl_fin_util.parquet"
@@ -56,10 +62,14 @@ SIGNALS: dict[str, tuple[str, int]] = {
     "accruals_cf": ("accruals_cf", -1),
 }
 F_GROUP, COMPOSITE = "f_group", "composite"
-SIGNAL_ORDER = [F_GROUP, *SIGNALS, COMPOSITE]
+# sorted like the others but kept out of the composite (robustness checks)
+EXTRA_SIGNALS: dict[str, tuple[str, int]] = {"accruals_bs": ("accruals_bs", -1)}
+SIGNAL_ORDER = [F_GROUP, *SIGNALS, COMPOSITE, *EXTRA_SIGNALS]
 
 ROW_COLUMNS = ["cik", "fiscal_year", "period_end", "availability_date"]
-HOLDINGS_COLUMNS = ["t", "cik", "ticker", "signal", "bucket", "market_cap", "value", *ROW_COLUMNS[1:]]
+HOLDINGS_COLUMNS = [
+    "t", "cik", "ticker", "signal", "bucket", "market_cap", "value", *ROW_COLUMNS[1:],
+]
 
 
 @dataclass(frozen=True)
@@ -90,7 +100,9 @@ def months_between(earlier: pd.Series, later: pd.Series) -> pd.Series:
 # --- which row is known at t ---------------------------------------------------------------
 
 
-def select_sample(scores: pd.DataFrame, firms: pd.DataFrame, include_fin_util: bool) -> pd.DataFrame:
+def select_sample(
+    scores: pd.DataFrame, firms: pd.DataFrame, include_fin_util: bool
+) -> pd.DataFrame:
     """Scores rows with the firm's ``ticker``; without ``include_fin_util`` only firms whose
     ``excluded_from_main`` is False (financials, utilities and unknown SIC are dropped)."""
     info = firms[["cik", "ticker", "excluded_from_main"]]
@@ -177,8 +189,14 @@ def assign_buckets(universe: pd.DataFrame) -> pd.DataFrame:
     )
     composite = composite_score(pct)
     buckets = {F_GROUP: (f_group(universe["f_score"]), universe["f_score"])}
-    buckets |= {name: (quantile_bucket(pct[name]), universe[col]) for name, (col, _) in SIGNALS.items()}
+    buckets |= {
+        name: (quantile_bucket(pct[name]), universe[col]) for name, (col, _) in SIGNALS.items()
+    }
     buckets[COMPOSITE] = (quantile_bucket(percentile_rank(composite, t)), composite)
+    for name, (col, sign) in EXTRA_SIGNALS.items():
+        if col in universe:
+            ranks = percentile_rank(universe[col] * sign, t)
+            buckets[name] = (quantile_bucket(ranks), universe[col])
 
     base = universe[["t", "cik", "ticker", "market_cap", *ROW_COLUMNS[1:]]]
     parts = [
@@ -230,3 +248,119 @@ def stale_counts(stale: pd.DataFrame) -> pd.DataFrame:
     """Per year: distinct firms dropped as stale at least once, and firm-months dropped."""
     year = stale["t"].dt.year.rename("year")
     return stale.groupby(year).agg(firms=("cik", "nunique"), firm_months=("cik", "size"))
+
+
+# --- holding-period returns ----------------------------------------------------------------
+#
+# Returns run from the close of formation date t. A stock that stops trading is valued at its
+# last price: the return up to its last trade, then 0 (the position sits at that price). Yahoo
+# has no delisting returns, and Shumway (1997), The Delisting Bias in CRSP Data, Journal of
+# Finance 52, 327-340, shows performance delistings average about -30%, so this is optimistic
+# for failing firms. Each such case is logged.
+
+
+def full_month_ends(
+    calendar: pd.DatetimeIndex, asof: pd.Timestamp | None = None
+) -> pd.DatetimeIndex:
+    """Last trading day of every complete month in the calendar (see ``formation_dates``)."""
+    asof = pd.Timestamp.today() if asof is None else pd.Timestamp(asof)
+    return formation_dates(calendar, calendar[0].year, asof)
+
+
+def months_ahead(month_ends: pd.DatetimeIndex, steps: int) -> dict[pd.Timestamp, pd.Timestamp]:
+    """Map each month end to the month end ``steps`` months later (absent near the end)."""
+    return dict(zip(month_ends[:-steps], month_ends[steps:]))
+
+
+def firm_next_month_returns(
+    holdings: pd.DataFrame, monthly: pd.DataFrame, month_ends: pd.DatetimeIndex
+) -> pd.DataFrame:
+    """Per held (t, ticker) whose next month is complete: ``ret`` = total return from t to the
+    next month end (``month``). ``status`` is 'full', 'partial' (stopped trading during the
+    month: return to the last trade) or 'none' (no trade in the month: 0)."""
+    firms = holdings[["t", "ticker"]].drop_duplicates()
+    firms = firms.assign(month=firms["t"].map(months_ahead(month_ends, 1)))
+    firms = firms.dropna(subset=["month"])
+    px = monthly[["ticker", "t", "date", "ret"]].rename(columns={"t": "month"})
+    out = firms.merge(px, on=["ticker", "month"], how="left")
+    out["status"] = np.select(
+        [out["date"].isna(), out["date"] < out["month"]], ["none", "partial"], "full"
+    )
+    out["ret"] = out["ret"].mask(out["status"] == "none", 0.0)
+    _log_lost_prices(out, "next-month")
+    return out[["t", "ticker", "month", "ret", "status"]].reset_index(drop=True)
+
+
+def firm_forward_returns(
+    holdings: pd.DataFrame,
+    monthly: pd.DataFrame,
+    month_ends: pd.DatetimeIndex,
+    horizons: Sequence[int] = (3, 6, 12),
+    benchmark: str = "SPY",
+) -> pd.DataFrame:
+    """Per held (t, ticker) and horizon h: buy-and-hold total return from t to the month end h
+    months later (``end``) minus the benchmark's over the same span (``ret``, an excess
+    return; ``bh`` and ``bh_benchmark`` are the parts). A stock that stops trading is valued
+    at its last price (``status`` 'lost'). Overlapping by construction: consecutive formation
+    dates share h-1 months."""
+    px = monthly[["ticker", "t", "adj_close"]].assign(t=lambda d: as_days(d["t"]))
+    bench = px[px["ticker"] == benchmark].set_index("t")["adj_close"]
+    firms = holdings[["t", "ticker"]].drop_duplicates().assign(t=lambda d: as_days(d["t"]))
+    start = firms.merge(px, on=["ticker", "t"])
+    later = px.rename(columns={"t": "last_t", "adj_close": "adj_end"}).sort_values("last_t")
+    parts = []
+    for h in horizons:
+        f = start.assign(horizon=h, end=start["t"].map(months_ahead(month_ends, h)))
+        f = f.dropna(subset=["end"]).assign(end=lambda d: as_days(d["end"])).sort_values("end")
+        last = pd.merge_asof(
+            f, later, left_on="end", right_on="last_t", by="ticker", direction="backward"
+        )
+        last["bh"] = last["adj_end"] / last["adj_close"] - 1
+        bench_end = bench.reindex(last["end"]).to_numpy()
+        last["bh_benchmark"] = bench_end / bench.reindex(last["t"]).to_numpy() - 1
+        last["status"] = np.where(last["last_t"] < last["end"], "lost", "full")
+        parts.append(last)
+    out = pd.concat(parts, ignore_index=True)
+    out["ret"] = out["bh"] - out["bh_benchmark"]
+    _log_lost_prices(out.rename(columns={"end": "month"}), "buy-and-hold")
+    cols = ["t", "ticker", "horizon", "end", "bh", "bh_benchmark", "ret", "status"]
+    return out[cols].sort_values(["horizon", "t", "ticker"], ignore_index=True)
+
+
+def _log_lost_prices(firm_returns: pd.DataFrame, label: str) -> None:
+    lost = firm_returns[firm_returns["status"] != "full"]
+    if lost.empty:
+        return
+    first = lost.drop_duplicates("ticker")
+    detail = ", ".join(f"{r.ticker} {r.month:%Y-%m}" for r in first.itertuples())
+    log.warning("%s returns: %d firm-periods lost price data, valued at the last price (no "
+                "delisting return): %s", label, len(lost), detail)
+
+
+def bucket_returns(
+    holdings: pd.DataFrame, firm_returns: pd.DataFrame, keys: Sequence[str] = ("month",)
+) -> pd.DataFrame:
+    """Per signal, formation date t, ``keys`` and bucket: equal-weighted (``ew``) and
+    value-weighted (``vw``, weights = market_cap at t) mean of the firms' ``ret``, with the
+    number of firms in each. Firms without a market cap are left out of ``vw`` only."""
+    merged = holdings[["signal", "t", "ticker", "bucket", "market_cap"]].merge(
+        firm_returns[["t", "ticker", *keys, "ret"]], on=["t", "ticker"], how="inner"
+    ).dropna(subset=["ret"])
+    cap = merged["market_cap"].where(merged["market_cap"] > 0)
+    merged = merged.assign(cap=cap, cap_ret=cap * merged["ret"])
+    grouped = merged.groupby(["signal", "t", *keys, "bucket"], sort=True)
+    out = grouped.agg(ew=("ret", "mean"), n=("ret", "size"), cap=("cap", "sum"),
+                      cap_ret=("cap_ret", "sum"), n_vw=("cap", "count"))
+    out["vw"] = out["cap_ret"] / out["cap"].where(out["n_vw"] > 0)
+    return out.drop(columns=["cap", "cap_ret"]).reset_index()
+
+
+def long_short(port: pd.DataFrame, keys: Sequence[str] = ("month",)) -> pd.DataFrame:
+    """Top minus bottom bucket per signal, t and ``keys``: Q5 - Q1 for quintiles, high (3) -
+    low (1) for ``f_group``; ``ew`` and ``vw``. Missing where either leg is empty."""
+    top = port.groupby("signal")["bucket"].transform("max")
+    index = ["signal", "t", *keys]
+    high = port[port["bucket"] == top].set_index(index)[["ew", "vw"]]
+    low = port[port["bucket"] == 1].set_index(index)[["ew", "vw"]]
+    return high.sub(low).dropna(how="all").reset_index()
+

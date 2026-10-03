@@ -18,7 +18,7 @@ def score_row(cik: str, period_end: str, available: str, f: float = 6.0, z: floa
     return {
         "cik": cik, "period_end": T(period_end), "fiscal_year": T(period_end).year,
         "availability_date": T(available), "f_score": f, "z_score": z, "m_score": m,
-        "accruals_cf": acc, "shares_out_adj": shares,
+        "accruals_cf": acc, "accruals_bs": acc, "shares_out_adj": shares,
     }
 
 
@@ -128,10 +128,10 @@ def test_orientation_puts_high_quality_in_bucket_5_and_quintiles_balance() -> No
     ))
     h = build(rows, firms_frame([str(i) for i in range(10)])).holdings
     at = h[h["t"] == T("2020-03-31")].pivot(index="cik", columns="signal", values="bucket")
-    quintiles = ["f_score", "altman_z", "beneish_m", "accruals_cf", "composite"]
-    assert at.loc["9", quintiles].tolist() == [5] * 5
-    assert at.loc["0", quintiles].tolist() == [1] * 5
-    for signal in ["f_score", "altman_z", "beneish_m", "accruals_cf", "composite"]:
+    quintiles = ["f_score", "altman_z", "beneish_m", "accruals_cf", "composite", "accruals_bs"]
+    assert at.loc["9", quintiles].tolist() == [5] * 6
+    assert at.loc["0", quintiles].tolist() == [1] * 6
+    for signal in quintiles:
         assert at[signal].value_counts().tolist() == [2] * 5
     assert at["f_group"].value_counts().sort_index().tolist() == [4, 3, 3]  # 0-3, 4-6, 7-9
 
@@ -169,3 +169,80 @@ def test_bucket_counts_average_per_month() -> None:
     counts = portfolios.bucket_counts(h)
     assert counts.loc[("f_group", 2020), 1] == 1.5
     assert counts.loc[("f_group", 2020), 3] == 0.5  # empty in February counts as 0
+
+
+# --- holding-period returns -----------------------------------------------------------------
+
+ENDS = portfolios.full_month_ends(CAL, T("2022-01-15"))
+MAR, APR, MAY, JUN, JUL = (T(d) for d in ["2020-03-31", "2020-04-30", "2020-05-29",
+                                          "2020-06-30", "2020-07-31"])
+
+
+def held(tickers: list[str], t: pd.Timestamp = MAR, caps: list[float] | None = None,
+         buckets: list[int] | None = None, signal: str = "composite") -> pd.DataFrame:
+    n = len(tickers)
+    return pd.DataFrame({
+        "t": t, "cik": tickers, "ticker": tickers, "signal": signal,
+        "bucket": buckets or [5] * n, "market_cap": caps or [1.0] * n,
+    })
+
+
+def monthly_rows(*rows: tuple[str, pd.Timestamp, pd.Timestamp, float, float]) -> pd.DataFrame:
+    """(ticker, t, date of last trade, adj_close, ret)."""
+    return pd.DataFrame(rows, columns=["ticker", "t", "date", "adj_close", "ret"])
+
+
+def test_next_month_return_when_a_stock_stops_trading(caplog: pytest.LogCaptureFixture) -> None:
+    monthly = monthly_rows(
+        ("A", MAR, MAR, 100.0, 0.0), ("A", APR, APR, 110.0, 0.10),
+        ("B", MAR, MAR, 50.0, 0.0), ("B", APR, T("2020-04-15"), 40.0, -0.20),  # stops mid-April
+        ("C", MAR, MAR, 20.0, 0.0),  # never trades in April
+    )
+    with caplog.at_level("WARNING"):
+        out = portfolios.firm_next_month_returns(held(["A", "B", "C"]), monthly, ENDS).set_index("ticker")
+    assert out["month"].unique().tolist() == [APR]
+    assert out.loc["A", ["ret", "status"]].tolist() == [0.10, "full"]
+    assert out.loc["B", ["ret", "status"]].tolist() == [-0.20, "partial"]  # to its last trade
+    assert out.loc["C", ["ret", "status"]].tolist() == [0.0, "none"]  # held at its last price
+    assert "lost price data" in caplog.text and "B 2020-04" in caplog.text
+
+
+def test_last_full_month_has_no_next_month_return() -> None:
+    monthly = monthly_rows(("A", ENDS[-1], ENDS[-1], 100.0, 0.0))
+    assert portfolios.firm_next_month_returns(held(["A"], t=ENDS[-1]), monthly, ENDS).empty
+
+
+def test_bucket_returns_equal_and_value_weighted_by_hand() -> None:
+    holdings = held(["A", "B", "C"], caps=[100.0, 300.0, np.nan])
+    firm_ret = pd.DataFrame({"t": MAR, "ticker": ["A", "B", "C"], "month": APR, "ret": [0.1, 0.0, -0.1]})
+    out = portfolios.bucket_returns(holdings, firm_ret).iloc[0]
+    assert out["ew"] == pytest.approx(0.0)  # (0.1 + 0 - 0.1) / 3
+    assert out["vw"] == pytest.approx(0.025)  # (0.1 * 100 + 0 * 300) / 400; C has no cap
+    assert (out["n"], out["n_vw"]) == (3, 2)
+
+
+def test_long_short_is_top_minus_bottom_bucket() -> None:
+    port = pd.DataFrame({
+        "signal": ["composite"] * 3 + ["f_group"] * 3, "t": MAR, "month": APR,
+        "bucket": [1, 3, 5, 1, 2, 3], "ew": [0.01, 0.02, 0.04, 0.03, 0.0, 0.01],
+        "vw": [0.02, 0.0, 0.01, 0.0, 0.0, 0.05],
+    })
+    ls = portfolios.long_short(port).set_index("signal")
+    assert ls.loc["composite", ["ew", "vw"]].tolist() == pytest.approx([0.03, -0.01])
+    assert ls.loc["f_group", ["ew", "vw"]].tolist() == pytest.approx([-0.02, 0.05])  # 3 - 1
+
+
+def test_forward_returns_in_excess_of_benchmark_and_lost_prices() -> None:
+    monthly = monthly_rows(
+        ("SPY", MAR, MAR, 100.0, 0.0), ("SPY", APR, APR, 101.0, 0.0),
+        ("SPY", MAY, MAY, 102.0, 0.0), ("SPY", JUN, JUN, 104.0, 0.0),
+        ("A", MAR, MAR, 50.0, 0.0), ("A", APR, APR, 55.0, 0.0),
+        ("A", MAY, MAY, 60.0, 0.0), ("A", JUN, JUN, 65.0, 0.0),
+        ("B", MAR, MAR, 10.0, 0.0), ("B", APR, APR, 8.0, 0.0),  # no prices after April
+    )
+    out = portfolios.firm_forward_returns(held(["A", "B"]), monthly, ENDS, horizons=(3,))
+    out = out.set_index("ticker")
+    assert out.loc["A", "end"] == JUN
+    assert out.loc["A", "bh"] == pytest.approx(0.30)  # 65 / 50 - 1
+    assert out.loc["A", "ret"] == pytest.approx(0.30 - 0.04)  # SPY 104 / 100 - 1
+    assert out.loc["B", "bh"] == pytest.approx(-0.20) and out.loc["B", "status"] == "lost"

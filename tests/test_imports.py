@@ -14,6 +14,7 @@ MODULES = [
     "prices",
     "portfolios",
     "stats",
+    "factors",
     "viz",
 ]
 
