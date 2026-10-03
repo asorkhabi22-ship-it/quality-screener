@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "ipykernel>=6", "nbformat>=5", "nbclient>=0.10", "nbconvert>=7"]  # notebooks: run + HTML export
 
 [tool.setuptools.packages.find]
 include = ["quality_screener*"]

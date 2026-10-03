@@ -29,6 +29,7 @@ log = logging.getLogger(__name__)
 TICKER_MAP_URL = "https://www.sec.gov/files/company_tickers.json"
 COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/{name}"
+ARCHIVES_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{folder}/{name}"
 
 MAX_TRIES = 5
 BACKOFF_BASE_SECONDS = 1.0
@@ -187,6 +188,23 @@ class EdgarClient:
             filings=_filings_frame(pages),
         )
 
+    def get_filing_index(self, cik: int | str, accn: str, refresh: bool = False) -> dict[str, Any]:
+        """The filing's folder listing on EDGAR Archives (``index.json``): every document in
+        the submission, e.g. to see whether it carried XBRL exhibits."""
+        url = archive_url(cik, accn, "index.json")
+        return self._get_json(url, f"archives/{pad_cik(cik)}", f"{accn}-index", refresh)
+
+    def get_filing_document(
+        self, cik: int | str, accn: str, name: str, refresh: bool = False
+    ) -> str:
+        """One document of a filing (e.g. the 10-K/A's primary HTML), cached as fetched."""
+        path = self.cache_dir / "archives" / pad_cik(cik) / accn / name
+        if path.exists() and not refresh:
+            return path.read_bytes().decode("utf-8", errors="replace")
+        body = self._fetch(archive_url(cik, accn, name))
+        _atomic_write(path, body)
+        return body.decode("utf-8", errors="replace")
+
     def _get_json(self, url: str, endpoint: str, key: str, refresh: bool) -> Any:
         """Return parsed JSON for ``url``, from ``cache_dir/endpoint/key.json`` when cached."""
         path = self.cache_dir / endpoint / f"{key}.json"
@@ -227,6 +245,11 @@ class EdgarClient:
             "Repeated 403/429 from SEC usually means a missing User-Agent or a rate-limit "
             "block, which SEC typically lifts after about 10 minutes."
         )
+
+
+def archive_url(cik: int | str, accn: str, name: str = "") -> str:
+    """EDGAR Archives URL of a filing folder or one of its documents."""
+    return ARCHIVES_URL.format(cik=int(pad_cik(cik)), folder=accn.replace("-", ""), name=name)
 
 
 def _parse_sic(raw: Any) -> int | None:

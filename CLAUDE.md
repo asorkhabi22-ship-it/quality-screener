@@ -51,6 +51,8 @@ quality_screener/     package
   portfolios.py       quintile portfolios on filing dates
   stats.py            return statistics and tests (Newey-West, CAPM / factor alphas)
   factors.py          Fama-French 5 factors + momentum (Ken French library, cached; optional)
+  restatements.py     restatement candidates: >2% revisions, benign-cause screens, 8-K 4.02 / 10-K/A
+  case_study.py       single-firm helpers: event-window returns, original vs restated, rescoring
   viz.py              plotly figures (one house style) + dashboard page helpers
 scripts/fetch_all.py  bulk download of companyfacts + submissions (failures -> data/raw/failures.csv)
 scripts/build_panels.py  PIT + all-versions panels for the universe, coverage report in reports/
@@ -62,7 +64,7 @@ scripts/build_dashboard.py  every figure (HTML + PNG) -> reports/figures, report
 data/sp500_constituents.csv  Wikipedia S&P 500 snapshot (fallback when the scrape fails)
 data/raw/             cached API responses (gitignored)
 data/processed/       parquet outputs
-notebooks/            exploration and case studies
+notebooks/            exploration and case studies (case_study.ipynb: SMCI restatement)
 reports/figures/      PNG + HTML charts
 tests/                pytest suite
 ```
@@ -81,6 +83,8 @@ python3 -m venv .venv
 .venv/bin/python scripts/build_portfolios.py         # holdings (--include-fin-util: robustness)
 .venv/bin/python scripts/run_backtest.py             # returns + statistics -> reports/results.md
 .venv/bin/python scripts/build_dashboard.py          # figures + dashboard (PNG needs Chrome)
+.venv/bin/jupyter nbconvert --to notebook --execute --inplace notebooks/case_study.ipynb
+.venv/bin/jupyter nbconvert --to html notebooks/case_study.ipynb --output-dir reports
 ```
 
 Homebrew Python is PEP 668 "externally managed": always install into `.venv`, never system Python.

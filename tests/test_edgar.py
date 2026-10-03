@@ -17,6 +17,7 @@ from quality_screener.edgar import (
     EdgarClient,
     EdgarError,
     TokenBucket,
+    archive_url,
     backoff_delay,
     pad_cik,
 )
@@ -242,3 +243,30 @@ def test_blank_sic_is_none(tmp_path: Path) -> None:
     sub = make_client(tmp_path, {url: [json_response(main)]}).get_submissions(AAPL)
     assert sub.sic is None
     assert sub.filings.empty
+
+
+# --- EDGAR Archives -------------------------------------------------------------------------
+
+COF = "0000927628"
+ACCN = "0001140361-11-014724"
+FOLDER = "https://www.sec.gov/Archives/edgar/data/927628/000114036111014724/"
+
+
+def test_archive_url_uses_unpadded_cik_and_bare_accession() -> None:
+    assert archive_url(COF, ACCN) == FOLDER
+    assert archive_url(927628, ACCN, "form10ka.htm") == FOLDER + "form10ka.htm"
+
+
+def test_filing_index_and_document_are_cached(tmp_path: Path) -> None:
+    index = {"directory": {"item": [{"name": "form10ka.htm"}]}}
+    routes = {
+        FOLDER + "index.json": [json_response(index)],
+        FOLDER + "form10ka.htm": [FakeResponse(200, b"<p>Explanatory Note</p>")],
+    }
+    client = make_client(tmp_path, routes)
+    assert client.get_filing_index(COF, ACCN) == index
+    assert client.get_filing_document(COF, ACCN, "form10ka.htm") == "<p>Explanatory Note</p>"
+    again = make_client(tmp_path, {})  # any request would fail: both served from cache
+    assert again.get_filing_index(COF, ACCN) == index
+    assert "Explanatory" in again.get_filing_document(COF, ACCN, "form10ka.htm")
+    assert again.network_calls == 0

@@ -13,7 +13,9 @@ the backtest only uses information that was public at the time.
 
 **Status:** complete pipeline from SEC filings to backtest. Results are in
 [reports/results.md](reports/results.md); charts are in `reports/figures/` and in
-`reports/dashboard.html` (open it in a browser; it only loads plotly.js from its CDN).
+`reports/dashboard.html` (open it in a browser; it only loads plotly.js from its CDN). A
+restatement case study on Supermicro (SMCI), built from the data and EDGAR filings, is in
+[notebooks/case_study.ipynb](notebooks/case_study.ipynb) and `reports/case_study.html`.
 
 ## Pipeline
 
